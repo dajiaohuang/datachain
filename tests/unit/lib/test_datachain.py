@@ -2353,6 +2353,17 @@ def test_read_parquet(tmp_dir, test_session):
     assert df_equal(df1, df)
 
 
+@pytest.mark.parametrize(
+    "kwargs,signal",
+    [({}, "b"), ({"output": {"b": int}}, "b"), ({"column": "t"}, "t.b")],
+)
+def test_read_parquet_one_column_without_source(tmp_dir, test_session, kwargs, signal):
+    path = tmp_dir / "one.parquet"
+    pq.write_table(pa.table({"b": [2]}), path)
+    chain = dc.read_parquet(path.as_uri(), source=False, session=test_session, **kwargs)
+    assert chain.to_values(signal) == [2]
+
+
 def test_read_parquet_exported_with_source(test_session, tmp_dir):
     path = tmp_dir / "df.parquet"
     path2 = tmp_dir / "df2.parquet"
