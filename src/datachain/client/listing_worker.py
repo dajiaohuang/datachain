@@ -157,6 +157,7 @@ class Pool:
                     client.fs_kwargs,
                     client.cache,
                     client.LIST_PAGE_SIZE,
+                    client.list_deleted,
                 )
             )
         except Exception:  # noqa: BLE001
@@ -295,9 +296,10 @@ def main() -> None:
 
     out = os.fdopen(os.dup(1), "wb")
     os.dup2(2, 1)  # stray prints must not corrupt the frames
-    cls, name, fs_kwargs, cache, page_size = load(sys.stdin.buffer)
+    cls, name, fs_kwargs, cache, page_size, list_deleted = load(sys.stdin.buffer)
     client = cls(name, fs_kwargs, cache)
     client.LIST_PAGE_SIZE = page_size
+    client.list_deleted = list_deleted
     sync(get_loop(), _serve, client, sys.stdin.buffer, out)
 
 

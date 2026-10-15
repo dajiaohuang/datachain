@@ -153,6 +153,7 @@ class Client(ABC):
     CREDENTIAL_KEYS: ClassVar[frozenset[str]] = frozenset()
     LIST_PAGE_SIZE: ClassVar[int] = 1000
     PROBE_BOUNDED_SPLITS: ClassVar[bool] = True  # pays off with large pages
+    list_deleted: bool = False  # listings also yield delete rows
 
     @classmethod
     def has_explicit_credentials(cls, client_config: dict | None) -> bool:

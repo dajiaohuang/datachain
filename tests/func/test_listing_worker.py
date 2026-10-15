@@ -1,4 +1,5 @@
 import asyncio
+import io
 import time
 from contextlib import aclosing
 
@@ -8,7 +9,7 @@ from fsspec.asyn import sync
 import datachain as dc
 from datachain.asyn import get_loop
 from datachain.client import Client
-from datachain.client.listing_worker import Child, Pool, item_path
+from datachain.client.listing_worker import Child, Pool, item_path, load
 from datachain.lib.convert.flatten import flatten, row_type
 from datachain.lib.file import File
 from datachain.lib.listing import list_bucket
@@ -230,3 +231,13 @@ def test_file_types_from_children(
     assert remote_rows
     assert {type(f) for f in files} == {file_type}
     assert sorted(flatten(f) for f in files) == listing(client, processes=False)
+
+
+@pytest.mark.parametrize("cloud_type", ["s3"], indirect=True)
+@pytest.mark.parametrize("list_deleted", [False, True])
+def test_children_get_list_deleted(client, list_deleted):
+    client.list_deleted = list_deleted
+
+    *_, sent = load(io.BytesIO(Pool(client, 2).spec))
+
+    assert sent is list_deleted
