@@ -366,18 +366,31 @@ class ClientS3(Client):
             **kwargs,
         ):
             entries = page.get(key, [])
-            keys = [d["Key"] for d in entries + page.get("DeleteMarkers", [])]
-            yield (
-                [self._row_from_boto(d, versions) for d in entries if keep(d["Key"])],
-                max(keys, default=None),
-            )
+            markers = page.get("DeleteMarkers", [])
+            keys = [d["Key"] for d in entries + markers]
+            rows: list[Any] = [
+                self._row_from_boto(d, versions) for d in entries if keep(d["Key"])
+            ]
+            if self.list_deleted and markers:
+                rows += [
+                    self._deleted_row(d["Key"], d["VersionId"], d["LastModified"])
+                    for d in markers
+                    if keep(d["Key"])
+                ]
+                rows.sort(key=lambda r: r.path)  # stable: keys stay grouped
+            yield rows, max(keys, default=None)
 
     def _row_from_boto(self, v, versions: bool) -> tuple:
+        version = ""
+        if versions:
+            version = v.get("VersionId", "")
+            if not self.list_deleted:
+                version = ClientS3.clean_s3_version(version)
         return FileRow(
             self.uri,
             v["Key"],
             v["Size"],
-            ClientS3.clean_s3_version(v.get("VersionId", "")) if versions else "",
+            version,
             v.get("ETag", "").strip('"'),
             v.get("IsLatest", True),
             v["LastModified"],

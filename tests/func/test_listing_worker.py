@@ -241,3 +241,58 @@ def test_children_get_list_deleted(client, list_deleted):
     *_, sent = load(io.BytesIO(Pool(client, 2).spec))
 
     assert sent is list_deleted
+
+
+@pytest.mark.parametrize("cloud_type", ["s3"], indirect=True)
+@pytest.mark.parametrize("version_aware", [True], indirect=True)
+@pytest.mark.parametrize("tree", [TREE], indirect=True)
+def test_deletes_across_pages_are_exact(client, tree, children, remote_rows):
+    bucket = client.name
+    for i in range(4):
+        client.fs.pipe_file(f"{client.uri}/big/031", str(i).encode())
+        client.fs.rm_file(f"{client.uri}/big/031")
+    client.fs.pipe_file(f"{client.uri}/big/0315", b"x")
+    for _ in range(6):  # the newest entries fill pages with delete markers only
+        sync(
+            get_loop(),
+            client.fs._call_s3,
+            "delete_object",
+            Bucket=bucket,
+            Key="big/0315",
+        )
+    client.list_deleted = True
+
+    items = sync(get_loop(), _items, client, "", True)
+    deleted = [i for i in items if i.location]
+
+    assert remote_rows
+    assert rows(items) == listing(client, processes=False)
+    assert sum(item_path(i) == "big/031" for i in items) == 9  # 5 versions
+    assert sum(item_path(i) == "big/0315" for i in items) == 7
+    assert sorted(item_path(i) for i in deleted) == ["big/031"] * 4 + ["big/0315"] * 6
+    assert {(i.size, i.etag, i.is_latest) for i in deleted} == {(0, "", False)}
+    assert len({i.version for i in deleted}) == 10
+
+
+@pytest.mark.parametrize("cloud_type", ["s3"], indirect=True)
+@pytest.mark.parametrize("version_aware", [True], indirect=True)
+@pytest.mark.parametrize("tree", [TREE], indirect=True)
+def test_pages_with_deletes_keep_keys_in_order(client, tree):
+    client.fs.pipe_file(f"{client.uri}/order/a", b"1")
+    client.fs.rm_file(f"{client.uri}/order/a")
+    for i in range(3):
+        client.fs.pipe_file(f"{client.uri}/order/b", str(i).encode())
+    client.list_deleted = True
+
+    pages = sync(get_loop(), _pages, client, "order/")
+
+    assert [[(r.path, bool(r.location)) for r in page] for page in pages] == [
+        [("order/a", False), ("order/a", True), ("order/b", False), ("order/b", False)],
+        [("order/b", False)],
+    ]
+
+
+async def _pages(client, prefix):
+    pages = client._pages_after(prefix, "", lambda _: True)
+    async with aclosing(pages):
+        return [rows async for rows, _ in pages]
