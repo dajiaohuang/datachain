@@ -173,8 +173,8 @@ def test_read_storage_rfc_encoded_uri_targets_literal_path(tmp_dir, test_session
     [("s3", True), ("gs", True)],
     indirect=True,
 )
-def test_read_storage_versions(cloud_test_catalog):
-    ctc = cloud_test_catalog
+def test_read_storage_versions(cloud_test_catalog_upload):
+    ctc = cloud_test_catalog_upload
     session = ctc.session
     prefix = f"history-{uuid.uuid4().hex[:8]}"
     (ctc.src / prefix / "kept").write_text("1")
