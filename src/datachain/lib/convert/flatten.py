@@ -108,8 +108,24 @@ def row_type(model: type[BaseModel]) -> type[Any]:
             "__slots__": (),
             "__dc_model__": model,
             "__reduce__": lambda row: (_rebuild_row, (model, tuple(row))),
+            "__getattr__": _row_getattr,
         },
     )
+
+
+def _row_getattr(row: tuple, name: str) -> Any:
+    """Attributes the row lacks come from its model built from the row, so rows
+    take model methods and nested models (``row.robot.fps``)."""
+    model = row_model(row)
+    if (
+        name.startswith("_")
+        or model is None
+        or not (name in model.model_fields or hasattr(model, name))
+    ):
+        raise AttributeError(f"'{type(row).__name__}' object has no attribute '{name}'")
+    from datachain.lib.convert.unflatten import unflatten_to_json
+
+    return getattr(model(**unflatten_to_json(model, row)), name)
 
 
 def _row_defaults(field: Any) -> list[Any] | None:

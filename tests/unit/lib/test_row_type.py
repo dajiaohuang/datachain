@@ -1,3 +1,4 @@
+import copy
 import pickle
 from collections.abc import Iterator
 from datetime import datetime, timezone
@@ -304,3 +305,33 @@ def test_rows_go_through_an_overridden_convert_type(test_session, monkeypatch):
         assert stored[0][0] == "HELLO"
     finally:
         dataset._keeps_exact_types.cache_clear()
+
+
+def test_row_type_rows_take_model_attributes():
+    row = dc.row_type(dc.File)("s3://bucket", "dir/a.txt", 3)
+
+    assert row.get_fs_path() == "s3://bucket/dir/a.txt"
+    assert row.name == "a.txt"
+    assert row.get_file_ext() == "txt"
+
+
+def test_row_type_rows_take_nested_models():
+    meta_row = dc.row_type(Meta)
+
+    assert meta_row("m", 0, 1, "y", ("t",)).info == Info(a=1, b="y")
+    assert meta_row("m", 0, 1, "y", ("t",)).info.a == 1
+    assert meta_row("m").info is None
+
+
+def test_row_type_rows_missing_attribute():
+    row = dc.row_type(Meta)("m")
+
+    with pytest.raises(
+        AttributeError, match="'MetaRow' object has no attribute 'nope'"
+    ):
+        row.nope  # noqa: B018
+    with pytest.raises(AttributeError, match="_private"):
+        row._private  # noqa: B018
+    assert not hasattr(row, "nope")
+    assert copy.deepcopy(row) == row
+    assert pickle.loads(pickle.dumps(row)) == row  # noqa: S301
