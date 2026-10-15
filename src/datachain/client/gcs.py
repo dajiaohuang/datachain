@@ -233,6 +233,7 @@ class GCSClient(Client):
         hi: str | None = None,
     ) -> AsyncGenerator[Page, None]:
         token = None
+        held: list[dict[str, Any]] = []  # a key whose generations may go on
         while True:
             page = await self.fs._call(
                 "GET",
@@ -248,12 +249,46 @@ class GCSClient(Client):
                 versions="true" if self._is_version_aware() else "false",
             )
             items = page.get("items", [])
-            yield (
-                [self._row(d) for d in items if keep(d["name"])],
-                items[-1]["name"] if items else None,
-            )
-            if (token := page.get("nextPageToken")) is None:
+            last = items[-1]["name"] if items else None
+            token = page.get("nextPageToken")
+            if self.list_deleted:
+                items, held = held + items, []
+                if token is not None and items:
+                    cut = len(items)
+                    while cut and items[cut - 1]["name"] == items[-1]["name"]:
+                        cut -= 1
+                    items, held = items[:cut], items[cut:]
+            yield self._rows([d for d in items if keep(d["name"])]), last
+            if token is None:
                 return
+
+    def _rows(self, items: list[dict[str, Any]]) -> list[tuple]:
+        if not self.list_deleted:
+            return [self._row(d) for d in items]
+        items = sorted(items, key=lambda d: (d["name"], int(d["generation"])))
+        rows = []
+        for i, d in enumerate(items):
+            rows.append(self._row(d))
+            after = items[i + 1] if i + 1 < len(items) else None
+            if deleted_at := self._deleted_at(d, after):
+                version = f"deleted:{d['generation']}"
+                rows.append(self._deleted_row(d["name"], version, deleted_at))
+        return rows
+
+    def _deleted_at(
+        self, d: dict[str, Any], after: dict[str, Any] | None
+    ) -> datetime | None:
+        """When generation ``d`` was deleted; None while it is live or after the
+        next generation replaced it (an overwrite)."""
+        if not (deleted := d.get("timeDeleted")):
+            return None
+        deleted_at = self.parse_timestamp(deleted)
+        replaced = (
+            after is not None
+            and after["name"] == d["name"]
+            and self.parse_timestamp(after["timeCreated"]) <= deleted_at
+        )
+        return None if replaced else deleted_at
 
     def _row(self, d: dict[str, Any]) -> tuple:
         return FileRow(

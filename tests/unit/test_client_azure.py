@@ -9,7 +9,7 @@ from fsspec.asyn import sync
 from fsspec.callbacks import DEFAULT_CALLBACK
 
 from datachain.asyn import get_loop
-from datachain.client.azure import AzureClient
+from datachain.client.azure import EPOCH, AzureClient
 from datachain.lib.convert.flatten import row_type
 from datachain.lib.file import File
 
@@ -348,3 +348,64 @@ def test_hierarchical_namespace_lists_out_of_key_order(resource_type):
     sync(get_loop(), list_all)
 
     assert client._lists_in_key_order() is (not resource_type)
+
+
+def _blob(name, second, current):
+    flag = "<IsCurrentVersion>true</IsCurrentVersion>" if current else ""
+    return (
+        f"<Blob><Name>{name}</Name>"
+        f"<VersionId>2026-10-01T00:00:0{second}.0000000Z</VersionId>{flag}"
+        "<Properties><Last-Modified>Thu, 01 Oct 2026 00:00:00 GMT</Last-Modified>"
+        "<Etag>0x8DC</Etag><Content-Length>1</Content-Length></Properties></Blob>"
+    )
+
+
+@pytest.mark.parametrize("list_deleted", [False, True])
+def test_delete_rows_for_keys_without_a_current_version(list_deleted):
+    pages = [
+        [_blob("a", 1, False), _blob("a", 2, False)],
+        [_blob("a", 3, False), _blob("b", 1, True)],
+        [_blob("c", 1, False), _blob("c", 2, True), _blob("d", 1, False)],
+    ]
+
+    class Pages:
+        def __aiter__(self):
+            self.left = list(pages)
+            return self
+
+        async def __anext__(self):
+            if not self.left:
+                raise StopAsyncIteration
+            blobs = "".join(self.left.pop(0))
+            self._response = fromstring(  # noqa: S314
+                f"<EnumerationResults><Blobs>{blobs}</Blobs></EnumerationResults>"
+            )
+            return self._response
+
+    container = MagicMock()
+    container.__aenter__ = AsyncMock(return_value=container)
+    container.__aexit__ = AsyncMock(return_value=False)
+    container.list_blob_names.return_value.by_page.return_value = Pages()
+    client = AzureClient("mycontainer", {}, MagicMock())
+    client._fs = MagicMock(version_aware=True)
+    client._fs.service_client.get_container_client.return_value = container
+    client.list_deleted = list_deleted
+
+    async def all_pages():
+        listing = client._pages_after("", "", lambda _: True)
+        return [rows async for rows, _ in listing]
+
+    rows = [r for page in sync(get_loop(), all_pages) for r in page]
+    deleted = [(r.path, r.version, r.last_modified) for r in rows if r.location]
+
+    assert sorted(r.path for r in rows if not r.location) == list("aaabccd")
+    if list_deleted:
+        assert deleted == [
+            ("a", "deleted:2026-10-01T00:00:03.0000000Z", EPOCH),
+            ("d", "deleted:2026-10-01T00:00:01.0000000Z", EPOCH),
+        ]
+        assert all(
+            (r.size, r.etag, r.is_latest) == (0, "", False) for r in rows if r.location
+        )
+    else:
+        assert deleted == []

@@ -1,6 +1,8 @@
+import itertools
 import shutil
 from collections.abc import AsyncGenerator, Callable, Iterator
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from tempfile import SpooledTemporaryFile
 from typing import TYPE_CHECKING, Any
@@ -20,7 +22,7 @@ from fsspec.asyn import get_loop, sync
 from datachain.lib.convert.flatten import row_type
 from datachain.lib.file import File
 
-from .fsspec import BucketStatus, Client, Page
+from .fsspec import BucketStatus, Client, Page, split_last_key
 
 if TYPE_CHECKING:
     from datachain.client.writeconfig import WriteConfig
@@ -45,6 +47,7 @@ class _AzureWriteBuffer(SpooledTemporaryFile):
 
 
 FileRow = row_type(File)
+EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
 class AzureClient(Client):
@@ -285,6 +288,8 @@ class AzureClient(Client):
                 results_per_page=page_size or self.LIST_PAGE_SIZE,
                 **kwargs,
             ).by_page()
+            held: list[Any] = []  # a key whose versions may go on
+            last = None
             async for _ in pages:
                 blobs = pages._response.find("Blobs").findall("Blob")
                 if blobs and blobs[0].find("Properties/ResourceType") is not None:
@@ -295,7 +300,25 @@ class AzureClient(Client):
                     for b, n in zip(blobs, names, strict=True)
                     if keep(n)
                 ]
+                last = names[-1] if names else last
+                if self.list_deleted:
+                    files, held = split_last_key(held + files)
+                    files = self._with_deleted(files)
                 yield files, names[-1] if names else None
+            if held:
+                yield self._with_deleted(held), last
+
+    def _with_deleted(self, rows: list[Any]) -> list[Any]:
+        """``rows`` of complete keys, plus a delete row after each key that has
+        no current version. Azure keeps no delete time: it is epoch 0."""
+        out = []
+        for path, versions in itertools.groupby(rows, key=lambda r: r.path):
+            group = list(versions)
+            out += group
+            if not any(r.is_latest for r in group):
+                newest = max(r.version for r in group)
+                out.append(self._deleted_row(path, f"deleted:{newest}", EPOCH))
+        return out
 
     @staticmethod
     def _blob_name(blob: Element) -> str:

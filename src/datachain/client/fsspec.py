@@ -59,6 +59,14 @@ ResultQueue = asyncio.Queue[Sequence[Any]]  # File objects or row_type(File) row
 Page = tuple[list[Any], str | None]  # File rows and the last key listed
 
 
+def split_last_key(rows: list[Any]) -> tuple[list[Any], list[Any]]:
+    """``rows`` in key order, split before the rows of their last key."""
+    cut = len(rows)
+    while cut and rows[cut - 1].path == rows[-1].path:
+        cut -= 1
+    return rows[:cut], rows[cut:]
+
+
 def is_cloud_uri(uri: str) -> bool:
     protocol = urlparse(uri).scheme
     return protocol in CLOUD_STORAGE_PROTOCOLS
